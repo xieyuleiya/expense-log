@@ -130,17 +130,45 @@ input[type="number"], input[type="text"]{
   cursor:pointer;
 }
 
-.record-top{
-  display:flex;
-  justify-content:space-between;
+.record-info{
+  display:grid;
+  grid-template-columns: 1fr auto auto 1fr;
   align-items:center;
-  font-weight:bold;
-  margin-bottom:4px;
+  gap:10px;
 }
 
-.record-top span:first-child{
-  font-size:15px;
+.record-amount{
+  font-size:16px;
+  font-weight:bold;
   color:#333;
+  text-align:left;
+}
+
+.record-category{
+  font-size:13px;
+  font-weight:500;
+  color:#666;
+  background:#f5f5f5;
+  padding:2px 8px;
+  border-radius:12px;
+  text-align:center;
+  min-width:40px;
+}
+
+.record-date{
+  font-size:12px;
+  color:#999;
+  text-align:left;
+  min-width:80px;
+}
+
+.record-remark{
+  font-size:12px;
+  color:#666;
+  text-align:left;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
 }
 
 .record-actions{
@@ -330,12 +358,11 @@ function render(data){
     div.className="record";
     div.innerHTML=`
       <div class="record-content" onclick="toggleRecordActions(${r.id})">
-        <div class="record-top">
+        <div class="record-info">
           <span class="record-amount">${r.amount} 元</span>
           <span class="record-category">${r.category}</span>
-        </div>
-        <div class="record-info">
-          <small>${new Date(r.date).toLocaleString()} | ${r.type}${r.remark ? ' | ' + r.remark : ''}</small>
+          <span class="record-date">${new Date(r.date).toLocaleDateString()}</span>
+          ${r.remark ? `<span class="record-remark">${r.remark}</span>` : ''}
         </div>
       </div>
       <div class="record-actions" id="actions-${r.id}" style="display: none;">
