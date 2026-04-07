@@ -105,29 +105,29 @@ input[type="number"], input[type="text"]{
   background:#FF9500;
 }
 
-.history-btn{
-  background:#8B5CF6;
-}
-
 .primary-btn:hover,
-.export-btn:hover,
-.history-btn:hover{
+.export-btn:hover{
   transform:scale(1.02);
   opacity:0.9;
 }
 
 .record{
   background:white;
-  padding:12px;
   border-radius:10px;
   margin-top:8px;
   font-size:13px;
   box-shadow:0 2px 6px rgba(0,0,0,0.06);
   transition:all 0.2s ease;
+  overflow:hidden;
 }
 
 .record:hover{
   box-shadow:0 3px 9px rgba(0,0,0,0.1);
+}
+
+.record-content{
+  padding:10px 12px;
+  cursor:pointer;
 }
 
 .record-top{
@@ -135,12 +135,46 @@ input[type="number"], input[type="text"]{
   justify-content:space-between;
   align-items:center;
   font-weight:bold;
-  margin-bottom:6px;
+  margin-bottom:4px;
 }
 
 .record-top span:first-child{
-  font-size:16px;
+  font-size:15px;
   color:#333;
+}
+
+.record-actions{
+  display:flex;
+  gap:8px;
+  padding:8px 12px 12px;
+  border-top:1px solid #f0f0f0;
+  background:#fafafa;
+}
+
+.record-actions button{
+  flex:1;
+  padding:6px 12px;
+  border:none;
+  border-radius:6px;
+  font-size:12px;
+  font-weight:500;
+  cursor:pointer;
+  transition:all 0.2s ease;
+}
+
+.record-actions button:first-child{
+  background:#007AFF;
+  color:white;
+}
+
+.record-actions button:last-child{
+  background:#FF3B30;
+  color:white;
+}
+
+.record-actions button:hover{
+  transform:scale(1.05);
+  opacity:0.9;
 }
 
 .record-top span:last-child{
@@ -230,7 +264,6 @@ input[type="number"], input[type="text"]{
 <div class="button-row">
   <button class="primary-btn" onclick="addRecord()">保存记录</button>
   <button class="export-btn" onclick="exportCSV()">导出 CSV</button>
-  <button class="history-btn" onclick="showExportHistory()">导出历史</button>
 </div>
 
 <div class="filter">
@@ -240,17 +273,6 @@ input[type="number"], input[type="text"]{
 </div>
 
 <div id="list"></div>
-
-<!-- 导出历史模态框 -->
-<div id="exportHistoryModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 1000;">
-  <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; width: 90%; max-width: 400px; border-radius: 12px; padding: 20px; max-height: 80vh; overflow-y: auto;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-      <h3 style="margin: 0; font-size: 18px; font-weight: 600;">导出历史</h3>
-      <button onclick="closeExportHistory()" style="background: none; border: none; font-size: 24px; cursor: pointer;">&times;</button>
-    </div>
-    <div id="exportHistoryList"></div>
-  </div>
-</div>
 
 <script>
 let records = JSON.parse(localStorage.getItem("records")||"[]");
@@ -307,12 +329,16 @@ function render(data){
     const div=document.createElement("div");
     div.className="record";
     div.innerHTML=`
-      <div class="record-top">
-        <span>${r.amount} 元</span>
-        <span>${r.category}</span>
+      <div class="record-content" onclick="toggleRecordActions(${r.id})">
+        <div class="record-top">
+          <span class="record-amount">${r.amount} 元</span>
+          <span class="record-category">${r.category}</span>
+        </div>
+        <div class="record-info">
+          <small>${new Date(r.date).toLocaleString()} | ${r.type}${r.remark ? ' | ' + r.remark : ''}</small>
+        </div>
       </div>
-      <small>${new Date(r.date).toLocaleString()} | ${r.type}${r.remark ? ' | ' + r.remark : ''}</small>
-      <div>
+      <div class="record-actions" id="actions-${r.id}" style="display: none;">
         <button onclick="showEdit(${r.id})">编辑</button>
         <button onclick="removeRecord(${r.id})">删除</button>
       </div>
@@ -320,6 +346,19 @@ function render(data){
     `;
     list.appendChild(div);
   });
+}
+
+// 切换记录操作按钮的显示/隐藏
+function toggleRecordActions(id) {
+  // 先隐藏所有其他记录的操作按钮
+  document.querySelectorAll('.record-actions').forEach(actions => {
+    actions.style.display = 'none';
+  });
+  // 显示当前记录的操作按钮
+  const actions = document.getElementById(`actions-${id}`);
+  if (actions) {
+    actions.style.display = 'flex';
+  }
 }
 
 function showEdit(id){
@@ -408,84 +447,9 @@ function exportCSV(){
   const fileName = `记账导出${year}${month}${day}${hour}${minute}${second}.csv`;
   a.download=fileName;
   a.click();
-  
-  // 保存导出记录到本地存储
-  saveExportRecord(fileName, csv);
 }
 
-// 保存导出记录到本地存储
-function saveExportRecord(fileName, csv) {
-  // 获取现有的导出记录
-  let exportHistory = JSON.parse(localStorage.getItem("exportHistory") || "[]");
-  
-  // 添加新的导出记录
-  exportHistory.unshift({
-    id: Date.now(),
-    fileName: fileName,
-    csv: csv,
-    exportTime: new Date().toISOString()
-  });
-  
-  // 限制导出记录数量，只保留最近10条
-  if (exportHistory.length > 10) {
-    exportHistory = exportHistory.slice(0, 10);
-  }
-  
-  // 保存到本地存储
-  localStorage.setItem("exportHistory", JSON.stringify(exportHistory));
-}
 
-// 显示导出历史
-function showExportHistory() {
-  const modal = document.getElementById("exportHistoryModal");
-  const list = document.getElementById("exportHistoryList");
-  
-  // 获取导出历史
-  const exportHistory = JSON.parse(localStorage.getItem("exportHistory") || "[]");
-  
-  if (exportHistory.length === 0) {
-    list.innerHTML = "<p style='text-align: center; color: #999;'>暂无导出记录</p>";
-  } else {
-    list.innerHTML = exportHistory.map(item => {
-      const exportTime = new Date(item.exportTime).toLocaleString('zh-CN');
-      return `
-        <div style="padding: 12px; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="openExportRecord(${item.id})"><style>@media (hover: hover) { [onclick="openExportRecord(${item.id})"]:hover { background-color: #f5f5f5; } }</style>
-          <div style="flex: 1;">
-            <div style="font-weight: 500; margin-bottom: 4px;">${item.fileName}</div>
-            <div style="font-size: 12px; color: #999;">${exportTime}</div>
-          </div>
-          <div style="font-size: 16px; color: #007AFF;">→</div>
-        </div>
-      `;
-    }).join('');
-  }
-  
-  modal.style.display = "block";
-}
-
-// 关闭导出历史模态框
-function closeExportHistory() {
-  document.getElementById("exportHistoryModal").style.display = "none";
-}
-
-// 打开历史导出记录
-function openExportRecord(id) {
-  const exportHistory = JSON.parse(localStorage.getItem("exportHistory") || "[]");
-  const record = exportHistory.find(item => item.id === id);
-  
-  if (record) {
-    const blob = new Blob([record.csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    // 使用a标签模拟点击打开文件，兼容PWA模式
-    const a = document.createElement("a");
-    a.href = url;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }
-}
 
 document.querySelectorAll(".button-group button").forEach(btn=>{
   btn.onclick=()=>{
