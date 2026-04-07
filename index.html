@@ -53,7 +53,7 @@ input[type="number"], input[type="text"]{
   border:none;
   border-radius:10px;
   background:#e0e0e0;
-  font-size:13px;
+  font-size:15px;
   font-weight:500;
   transition:all 0.2s ease;
   writing-mode:vertical-rl;
@@ -221,19 +221,29 @@ input[type="number"], input[type="text"]{
   gap:6px;
 }
 
-.record div:nth-child(3) button{
-  padding:4px 10px;
+.edit-actions button{
+  flex:1;
+  padding:8px 12px;
   border:none;
-  border-radius:6px;
-  font-size:11px;
-  background:#f0f0f0;
-  color:#666;
+  border-radius:8px;
+  font-size:12px;
+  font-weight:500;
   transition:all 0.2s ease;
 }
 
-.record div:nth-child(3) button:hover{
-  background:#e0e0e0;
+.edit-actions button:first-child{
+  background:#34C759;
+  color:white;
+}
+
+.edit-actions button:last-child{
+  background:#FF3B30;
+  color:white;
+}
+
+.edit-actions button:hover{
   transform:scale(1.05);
+  opacity:0.9;
 }
 
 .filter{
@@ -366,8 +376,8 @@ function render(data){
         </div>
       </div>
       <div class="record-actions" id="actions-${r.id}" style="display: none;">
-        <button onclick="showEdit(${r.id})">编辑</button>
-        <button onclick="removeRecord(${r.id})">删除</button>
+        <button onclick="showEdit(${r.id}); event.stopPropagation();">编辑</button>
+        <button onclick="removeRecord(${r.id}); event.stopPropagation();">删除</button>
       </div>
       <div id="edit-${r.id}"></div>
     `;
@@ -377,14 +387,25 @@ function render(data){
 
 // 切换记录操作按钮的显示/隐藏
 function toggleRecordActions(id) {
-  // 先隐藏所有其他记录的操作按钮
-  document.querySelectorAll('.record-actions').forEach(actions => {
-    actions.style.display = 'none';
+  // 隐藏所有编辑表单
+  document.querySelectorAll('.edit-box').forEach(box => {
+    box.innerHTML = '';
   });
-  // 显示当前记录的操作按钮
+  editingId = null;
+  
+  // 切换当前记录的操作按钮显示/隐藏
   const actions = document.getElementById(`actions-${id}`);
   if (actions) {
-    actions.style.display = 'flex';
+    if (actions.style.display === 'flex') {
+      // 如果当前是显示状态，隐藏它
+      actions.style.display = 'none';
+    } else {
+      // 如果当前是隐藏状态，先隐藏所有其他的，再显示当前的
+      document.querySelectorAll('.record-actions').forEach(a => {
+        a.style.display = 'none';
+      });
+      actions.style.display = 'flex';
+    }
   }
 }
 
@@ -423,6 +444,11 @@ function saveEdit(id){
 function cancelEdit(id){
   document.getElementById("edit-"+id).innerHTML="";
   editingId=null;
+  // 隐藏操作按钮，回到初始状态
+  const actions = document.getElementById(`actions-${id}`);
+  if (actions) {
+    actions.style.display = 'none';
+  }
 }
 
 function removeRecord(id){
