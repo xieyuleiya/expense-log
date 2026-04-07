@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ExpenseLog</title>
+<style>
+body{
+  font-family:-apple-system,BlinkMacSystemFont;
+  background:#f5f5f5;
+  margin:0;
+  padding:12px;
+}
+h2{text-align:center;margin:16px 0 12px 0;font-size:22px;font-weight:700;color:#333;}
+
+input[type="number"], input[type="text"]{
+  width:100%;
+  padding:14px;
+  font-size:16px;
+  box-sizing:border-box;
+  border-radius:10px;
+  border:1px solid #ddd;
+  background:white;
+  box-shadow:0 2px 4px rgba(0,0,0,0.05);
+  margin-bottom:12px;
+}
+
+.section{margin:12px 0;}
+
+.input-row{
+  display:flex;
+  gap:10px;
+}
+
+.input-row input{
+  flex:1;
+  margin-bottom:0;
+}
+
+.button-group{
+  display:flex;
+  gap:6px;
+  margin:10px 0;
+  overflow-x:auto;
+  padding-bottom:4px;
+  height:80px;
+}
+.button-group button{
+  flex:1;
+  min-width:40px;
+  height:80px;
+  padding:10px 4px;
+  border:none;
+  border-radius:10px;
+  background:#e0e0e0;
+  font-size:13px;
+  font-weight:500;
+  transition:all 0.2s ease;
+  writing-mode:vertical-rl;
+  text-orientation:upright;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border:1px solid #d0d0d0;
+}
+
+.button-group button:hover{
+  background:#d0d0d0;
+  border-color:#c0c0c0;
+}
+.button-group button.selected{
+  background:#007AFF;
+  color:white;
+  transform:scale(1.05);
+}
+
+.radio-group{
+  display:flex;
+  justify-content:center;
+  gap:30px;
+}
+
+.button-row{
+  display:flex;
+  gap:8px;
+  margin:12px 0;
+}
+
+.button-row button{
+  flex:1;
+  padding:12px;
+  border:none;
+  border-radius:12px;
+  color:white;
+  font-size:14px;
+  font-weight:500;
+  transition:all 0.2s ease;
+}
+
+.primary-btn{
+  background:#34C759;
+}
+
+.export-btn{
+  background:#FF9500;
+}
+
+.history-btn{
+  background:#007AFF;
+}
+
+.primary-btn:hover,
+.export-btn:hover,
+.history-btn:hover{
+  transform:scale(1.02);
+  opacity:0.9;
+}
+
+.record{
+  background:white;
+  padding:12px;
+  border-radius:10px;
+  margin-top:8px;
+  font-size:13px;
+  box-shadow:0 2px 6px rgba(0,0,0,0.06);
+  transition:all 0.2s ease;
+}
+
+.record:hover{
+  box-shadow:0 3px 9px rgba(0,0,0,0.1);
+}
+
+.record-top{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  font-weight:bold;
+  margin-bottom:6px;
+}
+
+.record-top span:first-child{
+  font-size:16px;
+  color:#333;
+}
+
+.record-top span:last-child{
+  font-size:12px;
+  padding:3px 10px;
+  border-radius:10px;
+  background:#f0f0f0;
+  color:#666;
+}
+
+.record small{color:#999;font-size:11px;}
+
+.record div:nth-child(3){
+  margin-top:8px;
+  display:flex;
+  gap:6px;
+}
+
+.record div:nth-child(3) button{
+  padding:4px 10px;
+  border:none;
+  border-radius:6px;
+  font-size:11px;
+  background:#f0f0f0;
+  color:#666;
+  transition:all 0.2s ease;
+}
+
+.record div:nth-child(3) button:hover{
+  background:#e0e0e0;
+  transform:scale(1.05);
+}
+
+.filter{
+  display:flex;
+  gap:6px;
+  margin-top:10px;
+}
+.filter input{
+  flex:1;
+}
+
+.edit-box{
+  background:#eef;
+  padding:8px;
+  border-radius:8px;
+  margin-top:6px;
+}
+.edit-box input{
+  width:100%;
+  margin-bottom:5px;
+}
+.edit-actions{
+  display:flex;
+  gap:6px;
+}
+.edit-actions button{
+  flex:1;
+  padding:6px;
+}
+</style>
+</head>
+<body>
+
+<h2>ExpenseLog</h2>
+
+<div class="section input-row">
+  <input type="number" id="amount" placeholder="金额" autofocus>
+  <input type="text" id="remark" placeholder="备注">
+</div>
+
+<div class="section button-group" id="categoryGroup">
+  <button data-cat="早餐">早餐</button>
+  <button data-cat="午餐">午餐</button>
+  <button data-cat="晚餐">晚餐</button>
+  <button data-cat="夜宵">夜宵</button>
+  <button data-cat="住宿">住宿</button>
+  <button data-cat="日消">日消</button>
+  <button data-cat="其他">其他</button>
+</div>
+
+<div class="section radio-group">
+  <label><input type="radio" name="type" value="实时" checked> 实时</label>
+  <label><input type="radio" name="type" value="回忆"> 回忆</label>
+</div>
+
+<div class="button-row">
+  <button class="primary-btn" onclick="addRecord()">保存记录</button>
+  <button class="export-btn" onclick="exportCSV()">导出 CSV</button>
+  <button class="history-btn" onclick="showExportHistory()">导出历史</button>
+</div>
+
+<div class="filter">
+  <input type="date" id="start">
+  <input type="date" id="end">
+  <button onclick="applyFilter()">筛选</button>
+</div>
+
+<div id="list"></div>
+
+<!-- 导出历史模态框 -->
+<div id="exportHistoryModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 1000;">
+  <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; width: 90%; max-width: 400px; border-radius: 12px; padding: 20px; max-height: 80vh; overflow-y: auto;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+      <h3 style="margin: 0; font-size: 18px; font-weight: 600;">导出历史</h3>
+      <button onclick="closeExportHistory()" style="background: none; border: none; font-size: 24px; cursor: pointer;">&times;</button>
+    </div>
+    <div id="exportHistoryList"></div>
+  </div>
+</div>
+
+<script>
+let records = JSON.parse(localStorage.getItem("records")||"[]");
+let editingId = null;
+
+// 设置默认日期
+function setDefaultDates() {
+  const startDate = document.getElementById("start");
+  const endDate = document.getElementById("end");
+  
+  // 设置开始日期为2026年1月1日
+  startDate.value = "2026-01-01";
+  
+  // 设置结束日期为当前日期
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, '0');
+  const day = String(today.getDate()).padStart(2, '0');
+  endDate.value = `${year}-${month}-${day}`;
+}
+
+function saveStorage(){
+  localStorage.setItem("records",JSON.stringify(records));
+}
+
+function addRecord(){
+  const amount = parseFloat(document.getElementById("amount").value);
+  if(!amount){alert("输入金额");return;}
+  const catBtn = document.querySelector(".button-group button.selected");
+  if(!catBtn){alert("选分类");return;}
+  const type = document.querySelector("input[name='type']:checked").value;
+  const remark = document.getElementById("remark").value;
+
+  records.unshift({
+    id:Date.now(),
+    date:new Date().toISOString(),
+    amount,
+    category:catBtn.dataset.cat,
+    type,
+    remark
+  });
+
+  saveStorage();
+  render(records);
+  document.getElementById("amount").value="";
+  document.getElementById("remark").value="";
+  document.getElementById("amount").focus();
+}
+
+function render(data){
+  const list=document.getElementById("list");
+  list.innerHTML="";
+  data.forEach(r=>{
+    const div=document.createElement("div");
+    div.className="record";
+    div.innerHTML=`
+      <div class="record-top">
+        <span>${r.amount} 元</span>
+        <span>${r.category}</span>
+      </div>
+      <small>${new Date(r.date).toLocaleString()} | ${r.type}${r.remark ? ' | ' + r.remark : ''}</small>
+      <div>
+        <button onclick="showEdit(${r.id})">编辑</button>
+        <button onclick="removeRecord(${r.id})">删除</button>
+      </div>
+      <div id="edit-${r.id}"></div>
+    `;
+    list.appendChild(div);
+  });
+}
+
+function showEdit(id){
+  if(editingId && editingId!==id){
+    document.getElementById("edit-"+editingId).innerHTML="";
+  }
+  editingId=id;
+  const r=records.find(x=>x.id===id);
+  const box=document.getElementById("edit-"+id);
+  box.innerHTML=`
+    <div class="edit-box">
+      <input type="number" id="editAmount" value="${r.amount}">
+      <input type="text" id="editCategory" value="${r.category}">
+      <input type="text" id="editType" value="${r.type}">
+      <input type="text" id="editRemark" value="${r.remark || ''}" placeholder="备注">
+      <div class="edit-actions">
+        <button onclick="saveEdit(${id})">保存</button>
+        <button onclick="cancelEdit(${id})">取消</button>
+      </div>
+    </div>
+  `;
+}
+
+function saveEdit(id){
+  const r=records.find(x=>x.id===id);
+  r.amount=parseFloat(document.getElementById("editAmount").value);
+  r.category=document.getElementById("editCategory").value;
+  r.type=document.getElementById("editType").value;
+  r.remark=document.getElementById("editRemark").value;
+  saveStorage();
+  editingId=null;
+  render(records);
+}
+
+function cancelEdit(id){
+  document.getElementById("edit-"+id).innerHTML="";
+  editingId=null;
+}
+
+function removeRecord(id){
+  if(confirm("确认删除？")){
+    records=records.filter(r=>r.id!==id);
+    saveStorage();
+    render(records);
+  }
+}
+
+function applyFilter(){
+  const s=document.getElementById("start").value;
+  const e=document.getElementById("end").value;
+  let filtered=records;
+  if(s) filtered=filtered.filter(r=>r.date>=s);
+  if(e) filtered=filtered.filter(r=>r.date<=e+"T23:59:59");
+  render(filtered);
+}
+
+function exportCSV(){
+  let csv="时间,金额,分类,记录类型,备注\n";
+  records.forEach(r=>{
+    // 转换日期时间格式为更友好的格式
+    const date = new Date(r.date);
+    const formattedDate = date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+    csv+=`${formattedDate},${r.amount},${r.category},${r.type},${r.remark || ''}\n`;
+  });
+  const blob=new Blob([csv],{type:"text/csv"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  
+  // 生成带日期时间的文件名
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hour = String(now.getHours()).padStart(2, '0');
+  const minute = String(now.getMinutes()).padStart(2, '0');
+  const second = String(now.getSeconds()).padStart(2, '0');
+  
+  const fileName = `记账导出${year}${month}${day}${hour}${minute}${second}.csv`;
+  a.download=fileName;
+  a.click();
+  
+  // 保存导出记录到本地存储
+  saveExportRecord(fileName, csv);
+}
+
+// 保存导出记录到本地存储
+function saveExportRecord(fileName, csv) {
+  // 获取现有的导出记录
+  let exportHistory = JSON.parse(localStorage.getItem("exportHistory") || "[]");
+  
+  // 添加新的导出记录
+  exportHistory.unshift({
+    id: Date.now(),
+    fileName: fileName,
+    csv: csv,
+    exportTime: new Date().toISOString()
+  });
+  
+  // 限制导出记录数量，只保留最近10条
+  if (exportHistory.length > 10) {
+    exportHistory = exportHistory.slice(0, 10);
+  }
+  
+  // 保存到本地存储
+  localStorage.setItem("exportHistory", JSON.stringify(exportHistory));
+}
+
+// 显示导出历史
+function showExportHistory() {
+  const modal = document.getElementById("exportHistoryModal");
+  const list = document.getElementById("exportHistoryList");
+  
+  // 获取导出历史
+  const exportHistory = JSON.parse(localStorage.getItem("exportHistory") || "[]");
+  
+  if (exportHistory.length === 0) {
+    list.innerHTML = "<p style='text-align: center; color: #999;'>暂无导出记录</p>";
+  } else {
+    list.innerHTML = exportHistory.map(item => {
+      const exportTime = new Date(item.exportTime).toLocaleString('zh-CN');
+      return `
+        <div style="padding: 12px; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="openExportRecord(${item.id})"><style>@media (hover: hover) { [onclick="openExportRecord(${item.id})"]:hover { background-color: #f5f5f5; } }</style>
+          <div style="flex: 1;">
+            <div style="font-weight: 500; margin-bottom: 4px;">${item.fileName}</div>
+            <div style="font-size: 12px; color: #999;">${exportTime}</div>
+          </div>
+          <div style="font-size: 16px; color: #007AFF;">→</div>
+        </div>
+      `;
+    }).join('');
+  }
+  
+  modal.style.display = "block";
+}
+
+// 关闭导出历史模态框
+function closeExportHistory() {
+  document.getElementById("exportHistoryModal").style.display = "none";
+}
+
+// 打开历史导出记录
+function openExportRecord(id) {
+  const exportHistory = JSON.parse(localStorage.getItem("exportHistory") || "[]");
+  const record = exportHistory.find(item => item.id === id);
+  
+  if (record) {
+    const blob = new Blob([record.csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    // 直接打开文件，而不是下载
+    window.open(url, '_blank');
+  }
+}
+
+document.querySelectorAll(".button-group button").forEach(btn=>{
+  btn.onclick=()=>{
+    document.querySelectorAll(".button-group button").forEach(b=>b.classList.remove("selected"));
+    btn.classList.add("selected");
+  }
+});
+
+render(records);
+
+// 确保输入框聚焦
+function focusAmountInput() {
+  const amountInput = document.getElementById("amount");
+  if (amountInput) {
+    amountInput.focus();
+    amountInput.select(); // 选中输入框内容，便于直接输入
+    // 尝试触发输入法
+    if ('requestFocus' in amountInput) {
+      amountInput.requestFocus();
+    }
+  }
+}
+
+// 多种方式确保聚焦
+window.addEventListener('DOMContentLoaded', function() {
+  focusAmountInput();
+  setDefaultDates();
+});
+window.addEventListener('load', focusAmountInput);
+
+// 立即尝试聚焦（如果DOM已经加载）
+setTimeout(focusAmountInput, 100);
+</script>
+
+</body>
+</html>
