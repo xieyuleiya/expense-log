@@ -1,603 +1,543 @@
-# Excel设计表批量自动导入CAD（全自动版，无需手动点击）
-
-import tkinter as tk
-from tkinter import ttk, filedialog
-import win32com.client
-import win32gui
-import win32api
-import win32con
-import pythoncom
-from win32com.client import VARIANT
-import ctypes
-import os
-import threading
-import time
-
-DEFAULT_BLOCK_NAME = "tk-att"
-ATTRIBUTE_TAG_B = "B"
-
-
-class ExcelToCAD:
-    def __init__(self):
-        self.excel_file = "设计表.xlsm"
-        self.sheet_configs = {}
-        self.available_sheets = []
-        self._block_placement_cache = None
-        self._required_block_b_values = set()
-        self.debug_mode = True
-        self.window = None
-
-    # ──────────────────────────────────────────
-    #  界面
-    # ──────────────────────────────────────────
-
-    def show(self):
-        self.window = tk.Tk()
-        self.window.title("Excel→CAD 批量导入（全自动）")
-        self.window.resizable(False, False)
-        self.window.configure(bg="white")
-
-        sw = self.window.winfo_screenwidth()
-        self.window.geometry(f"720x560+{sw - 740}+20")
-        self.window.attributes("-topmost", True)
-        
-        # 确保窗口在激活时始终保持最上层
-        def on_activate(event):
-            self.window.attributes("-topmost", True)
-        
-        self.window.bind("<FocusIn>", on_activate)
-        self.window.bind("<Map>", on_activate)
-
-        main = tk.Frame(self.window, padx=12, pady=12, bg="white")
-        main.pack(fill=tk.BOTH, expand=True)
-
-        # 文件行
-        file_row = tk.Frame(main, bg="white")
-        file_row.pack(fill=tk.X, pady=(0, 8))
-        tk.Label(file_row, text="Excel文件:", font=("Arial", 9), bg="white").pack(side=tk.LEFT, padx=(0, 6))
-        self.path_var = tk.StringVar(value=self.excel_file)
-        tk.Entry(file_row, textvariable=self.path_var, width=44, font=("Arial", 8),
-                 relief="solid", bd=1).pack(side=tk.LEFT, padx=(0, 6), fill=tk.X, expand=True)
-        ttk.Button(file_row, text="浏览", command=self._browse, width=8).pack(side=tk.LEFT, padx=2)
-        ttk.Button(file_row, text="分析", command=self._analyze, width=8).pack(side=tk.LEFT, padx=2)
-
-        self.status_var = tk.StringVar(value="等待分析...")
-        tk.Label(main, textvariable=self.status_var, font=("Arial", 8),
-                 bg="white", fg="#666").pack(anchor="e", pady=(0, 6))
-
-        # 内容区
-        content = tk.Frame(main, bg="white")
-        content.pack(fill=tk.BOTH, expand=True)
-
-        # 左：工作表列表
-        lf = tk.LabelFrame(content, text="工作表配置", font=("Arial", 9, "bold"),
-                           bg="white", relief="groove", bd=1)
-        lf.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
-
-        tb_row = tk.Frame(lf, bg="white", pady=4)
-        tb_row.pack(fill=tk.X, padx=8)
-        ttk.Button(tb_row, text="全选", command=lambda: [self.tree.selection_add(i) for i in self.tree.get_children()], width=6).pack(side=tk.LEFT, padx=2)
-        ttk.Button(tb_row, text="全不选", command=lambda: self.tree.selection_remove(self.tree.selection()), width=6).pack(side=tk.LEFT, padx=2)
-        ttk.Button(tb_row, text="反选", command=self._invert, width=6).pack(side=tk.LEFT, padx=2)
-
-        cols = ("工作表名称", "起始列", "终止列", "B属性", "目标宽度", "状态")
-        self.tree = ttk.Treeview(lf, columns=cols, show="headings", height=12)
-        widths = (120, 45, 45, 70, 70, 48)
-        for col, w in zip(cols, widths):
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=w)
-        ttk.Style().configure("Treeview", font=("Arial", 8))
-        ttk.Style().configure("Treeview.Heading", font=("Arial", 8, "bold"))
-
-        sb = tk.Scrollbar(lf, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=sb.set)
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=4)
-        sb.pack(side=tk.RIGHT, fill=tk.Y, pady=4)
-
-        # 右：日志
-        rf = tk.LabelFrame(content, text="操作日志", font=("Arial", 9, "bold"),
-                           bg="white", relief="groove", bd=1)
-        rf.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(8, 0))
-
-        log_sb = tk.Scrollbar(rf)
-        log_sb.pack(side=tk.RIGHT, fill=tk.Y)
-        self.log_text = tk.Text(rf, height=15, width=34, yscrollcommand=log_sb.set,
-                                font=("Consolas", 8), wrap=tk.WORD, bg="#f8f8f8",
-                                relief="solid", bd=1, padx=6, pady=6)
-        self.log_text.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
-        log_sb.config(command=self.log_text.yview)
-
-        # 按钮行
-        btn_row = tk.Frame(main, bg="white")
-        btn_row.pack(fill=tk.X, pady=8)
-        ttk.Button(btn_row, text="批量导入CAD（全自动）",
-                   command=self._start_batch, width=20).pack(side=tk.LEFT, padx=3)
-
-        self.progress_var = tk.StringVar(value="就绪")
-        tk.Label(btn_row, textvariable=self.progress_var, font=("Arial", 9),
-                 bg="white", fg="#0078d4").pack(side=tk.LEFT, padx=16)
-
-        self.debug_var = tk.BooleanVar(value=self.debug_mode)
-        tk.Checkbutton(btn_row, text="调试", variable=self.debug_var,
-                       font=("Arial", 8), bg="white", fg="#666").pack(side=tk.RIGHT, padx=4)
-        ttk.Button(btn_row, text="退出", command=self.window.destroy, width=8).pack(side=tk.RIGHT, padx=4)
-
-        self.log("程序就绪")
-        self.log("Excel需有'CAD导入'配置表")
-        self.log("A:表名 B:起始列 C:终止列 D:B属性 E:目标宽度 F:X偏移 G:Y偏移")
-        self.window.mainloop()
-
-    # ──────────────────────────────────────────
-    #  UI 操作
-    # ──────────────────────────────────────────
-
-    def _browse(self):
-        path = filedialog.askopenfilename(
-            filetypes=[("Excel文件", "*.xlsx *.xls *.xlsm"), ("所有文件", "*.*")],
-            title="选择Excel设计表"
-        )
-        if path:
-            self.path_var.set(path)
-            self.excel_file = path
-            self._analyze()
-
-    def _invert(self):
-        sel = set(self.tree.selection())
-        all_ = set(self.tree.get_children())
-        self.tree.selection_remove(list(sel))
-        self.tree.selection_add(list(all_ - sel))
-
-    def _analyze(self):
-        self.excel_file = self.path_var.get()
-        if not os.path.exists(self.excel_file):
-            self.log("文件不存在"); return
-        self.log("分析中...")
-        self.status_var.set("分析中...")
-        threading.Thread(target=self._analyze_thread, daemon=True).start()
-
-    def _analyze_thread(self):
-        excel = wb = None
-        try:
-            pythoncom.CoInitialize()
-            excel = win32com.client.Dispatch("Excel.Application")
-            excel.Visible = False
-            excel.DisplayAlerts = False
-            wb = excel.Workbooks.Open(os.path.abspath(self.excel_file), ReadOnly=True)
-            self.available_sheets = [wb.Worksheets(i).Name for i in range(1, wb.Worksheets.Count + 1)]
-            ok = self._read_config(wb)
-            self.window.after(0, self._refresh_tree)
-            msg = f"已读取 {len(self.sheet_configs)} 个配置" if ok else "配置读取失败"
-            self.window.after(0, lambda: self.status_var.set(msg))
-            self.log(msg)
-        except Exception as e:
-            self.log(f"分析失败: {e}")
-        finally:
-            try:
-                if wb: wb.Close(SaveChanges=False)
-                if excel: excel.Quit()
-                pythoncom.CoUninitialize()
-            except: pass
-
-    def _read_config(self, wb):
-        """读取 'CAD导入' 配置表：A=表名 B=起始列 C=终止列 D=B属性 E=目标宽度 F=X偏移 G=Y偏移"""
-        try:
-            cfg_sheet = next(
-                (wb.Worksheets(i) for i in range(1, wb.Worksheets.Count + 1)
-                 if wb.Worksheets(i).Name == "CAD导入"), None
-            )
-            if not cfg_sheet:
-                self.log("未找到'CAD导入'工作表"); return False
-
-            self.sheet_configs = {}
-            for row in range(1, 101):
-                try:
-                    name = cfg_sheet.Cells(row, 1).Value
-                    sc   = cfg_sheet.Cells(row, 2).Value
-                    ec   = cfg_sheet.Cells(row, 3).Value
-                    if not (name and sc and ec):
-                        continue
-                    name = str(name).strip()
-                    sc   = str(sc).strip().upper()
-                    ec   = str(ec).strip().upper()
-
-                    b_attr = cfg_sheet.Cells(row, 4).Value
-                    tw_v   = cfg_sheet.Cells(row, 5).Value
-                    ox_v   = cfg_sheet.Cells(row, 6).Value
-                    oy_v   = cfg_sheet.Cells(row, 7).Value
-
-                    def _float(v, default):
-                        try: return float(v) if v is not None else default
-                        except: return default
-
-                    self.sheet_configs[name] = {
-                        "start_col":    sc,
-                        "end_col":      ec,
-                        "block_attr_b": str(b_attr).strip() if b_attr else None,
-                        "target_width": _float(tw_v, 13000.0),
-                        "offset_x":     _float(ox_v, 0.0),
-                        "offset_y":     _float(oy_v, 0.0),
-                        "status":       "有效" if name in self.available_sheets else "不存在",
-                    }
-                except: continue
-
-            return bool(self.sheet_configs)
-        except Exception as e:
-            self.log(f"读取配置失败: {e}"); return False
-
-    def _refresh_tree(self):
-        for i in self.tree.get_children():
-            self.tree.delete(i)
-        for name, cfg in self.sheet_configs.items():
-            self.tree.insert("", "end", values=(
-                name, cfg["start_col"], cfg["end_col"],
-                cfg.get("block_attr_b") or "(手动)",
-                f"{cfg['target_width']:.0f}",
-                cfg["status"],
-            ))
-
-    # ──────────────────────────────────────────
-    #  批量处理
-    # ──────────────────────────────────────────
-
-    def _start_batch(self):
-        sel = self.tree.selection()
-        if not sel:
-            self.log("请至少选择一个工作表"); return
-
-        valid = [self.tree.item(i)["values"][0]
-                 for i in sel if self.tree.item(i)["values"][5] == "有效"]
-        if not valid:
-            self.log("没有有效配置"); return
-
-        missing = [n for n in valid if not self.sheet_configs[n].get("block_attr_b")]
-        if missing:
-            self.log(f"以下工作表缺少D列(B属性)，无法全自动: {', '.join(missing)}")
-            self.log("请在'CAD导入'配置表D列填写对应的块B属性值")
-            return
-
-        self.selected_sheets = valid
-        self._block_placement_cache = None
-        self._required_block_b_values = {
-            self.sheet_configs[n]["block_attr_b"] for n in valid
-        }
-
-        self.log(f"开始批量处理 {len(valid)} 个表...")
-        self.progress_var.set(f"处理中 0/{len(valid)}")
-        threading.Thread(target=self._batch_thread, daemon=True).start()
-
-    def _batch_thread(self):
-        excel = wb = None
-        try:
-            pythoncom.CoInitialize()
-            excel = win32com.client.Dispatch("Excel.Application")
-            excel.Visible = False
-            excel.DisplayAlerts = False
-            excel.ScreenUpdating = False
-            wb = excel.Workbooks.Open(os.path.abspath(self.excel_file), ReadOnly=True)
-
-            for i, name in enumerate(self.selected_sheets):
-                self.window.after(0, lambda i=i: self.progress_var.set(f"处理中 {i+1}/{len(self.selected_sheets)}"))
-                self.log(f"▶ ({i+1}/{len(self.selected_sheets)}) {name}")
-                try:
-                    ok = self._process_sheet(wb, name)
-                    self.log(f"{'✓' if ok else '✗'} {name}")
-                    if ok and i < len(self.selected_sheets) - 1:
-                        time.sleep(0.02)
-                except Exception as e:
-                    self.log(f"✗ {name} 出错: {e}")
-
-            excel.Visible = True
-            excel.ScreenUpdating = True
-            self.window.after(0, lambda: self.progress_var.set("批量处理完成"))
-            self.log(f"完成！共处理 {len(self.selected_sheets)} 个表")
-        except Exception as e:
-            self.log(f"批量处理失败: {e}")
-            self.window.after(0, lambda: self.progress_var.set("处理失败"))
-        finally:
-            try:
-                if wb: wb.Close(SaveChanges=False)
-                if excel: excel.Quit()
-                pythoncom.CoUninitialize()
-            except: pass
-
-    def _process_sheet(self, wb, name):
-        """复制指定工作表数据并自动粘贴到CAD"""
-        cfg = self.sheet_configs[name]
-        sheet = wb.Worksheets(name)
-        r1, r2 = self._find_data_range(sheet, cfg["start_col"], cfg["end_col"])
-        if not r1:
-            self.log(f"⚠ {name}: 未找到数据"); return False
-
-        cell_range = sheet.Range(f"{cfg['start_col']}{r1}:{cfg['end_col']}{r2}")
-        sheet.Activate()
-        cell_range.Select()
-        cell_range.Copy()
-        time.sleep(0.02)
-        return self._paste_auto(name, cfg)
-
-    def _paste_auto(self, name, cfg):
-        """粘贴到CAD原点，按块B属性自动定位并缩放"""
-        try:
-            t0 = time.time()
-            zwcad = win32com.client.Dispatch("ZWCAD.Application")
-            zwcad.Visible = True
-            doc = zwcad.ActiveDocument
-            ms = doc.ModelSpace
-            count_before = ms.Count
-
-            self._cad_paste_at_origin(doc)
-            time.sleep(0.03)
-
-            entities = self._collect_new_entities(ms, count_before)
-            if not entities:
-                self.log(f"{name}: 未检测到粘贴结果"); return False
-
-            if self._block_placement_cache is None:
-                self._block_placement_cache = self._build_block_cache(
-                    doc, DEFAULT_BLOCK_NAME, self._required_block_b_values
-                )
-
-            want_b = (cfg["block_attr_b"] or "").strip()
-            pt = self._block_placement_cache.get(want_b)
-            if pt is None:
-                self.log(f"{name}: 未找到块 {DEFAULT_BLOCK_NAME} B=\"{want_b}\""); return False
-
-            placement = (pt[0] + cfg["offset_x"], pt[1] + cfg["offset_y"], pt[2])
-            self.log(f"{name}: 块({pt[0]:.0f},{pt[1]:.0f}) 偏移({cfg['offset_x']:.0f},{cfg['offset_y']:.0f})")
-            ok = self._move_and_scale(doc, entities, placement, cfg["target_width"])
-            self.debug(f"本表耗时 {time.time()-t0:.2f}s")
-            return ok
-        except Exception as e:
-            self.log(f"{name}: 自动定位失败 {e}"); return False
-
-    # ──────────────────────────────────────────
-    #  CAD 操作
-    # ──────────────────────────────────────────
-
-    def _cad_paste_at_origin(self, doc):
-        app = doc.Application
-        self._activate_cad(app)
-        time.sleep(0.03)
-        # 先启动监听，再发命令，确保弹窗无论多快都能被捕捉到
-        threading.Thread(target=self._auto_close_ole_dialog, daemon=True).start()
-        # 一次性发送命令+坐标，ZWCAD内部顺序消费，不会被sleep截断
-        doc.SendCommand("_PASTECLIP 0,0,0\n")
-        # 等待粘贴与OLE对话框处理完成
-        time.sleep(0.03)
-
-    def _activate_cad(self, app):
-        try:
-            hwnd = app.HWND
-            if hwnd:
-                ctypes.windll.user32.SetForegroundWindow(hwnd)
-                ctypes.windll.user32.ShowWindow(hwnd, 1)
-        except:
-            try: app.WindowState = 1
-            except: pass
-
-    @staticmethod
-    def _auto_close_ole_dialog():
-        possible_titles = [
-            "OLE 文字大小", "OLE Text Size",
-            "字体大小",     "Font Size",
-            "粘贴特殊对象", "Paste Special",
-        ]
-        BM_CLICK = 0x00F5
-        OK_TEXTS = {"确定", "OK", "是", "Yes"}
-
-        def _find_ok_button(hwnd):
-            found = []
-            def _cb(child, _):
-                try:
-                    cls  = win32gui.GetClassName(child)
-                    text = win32gui.GetWindowText(child).strip()
-                    if cls == "Button" and text in OK_TEXTS:
-                        found.append(child)
-                except: pass
-            try:
-                win32gui.EnumChildWindows(hwnd, _cb, None)
-            except: pass
-            return found[0] if found else None
-
-        for _ in range(50):          # 最多等待10秒
-            for title in possible_titles:
-                try:
-                    hwnd = win32gui.FindWindow(None, title)
-                    if hwnd and win32gui.IsWindowVisible(hwnd):
-                        btn = _find_ok_button(hwnd)
-                        if btn:
-                            win32gui.SendMessage(btn, BM_CLICK, 0, 0)
-                        else:
-                            # 兜底：直接发 WM_COMMAND IDOK 给对话框
-                            win32gui.SendMessage(hwnd, 0x0111, 1, 0)
-                        return
-                except:
-                    pass
-            time.sleep(0.1)
-
-    def _collect_new_entities(self, ms, count_before):
-        """收集粘贴后新增的实体"""
-        if ms.Count > count_before:
-            try:
-                return [ms.Item(i) for i in range(count_before, ms.Count)]
-            except: pass
-        try:
-            if ms.Count >= 1:
-                return [ms.Item(ms.Count - 1)]
-        except: pass
-        return []
-
-    # ──────────────────────────────────────────
-    #  块位置缓存（SelectionSet 过滤，快速）
-    # ──────────────────────────────────────────
-
-    def _build_block_cache(self, doc, block_name, required_b_values=None):
-        """
-        用 SelectionSet + 过滤器让 ZWCAD 进程内部筛选同名块，
-        Python 只拿到匹配实体，COM 调用次数从 N(全部实体) 降到 N(同名块)。
-        失败则回退到 ModelSpace 逐实体扫描。
-        """
-        self.log("构建块位置缓存...")
-        t0 = time.time()
-        cache = self._build_cache_via_selset(doc, block_name, required_b_values)
-        self.debug(f"缓存完成: {len(cache)} 个B值，耗时 {time.time()-t0:.2f}s")
-        return cache
-
-    def _build_cache_via_selset(self, doc, block_name, required_b_values=None):
-        """SelectionSet 方案（主方案）+ ModelSpace 逐实体扫描（兜底）"""
-        cache = {}
-        required = set(required_b_values) if required_b_values else None
-        SS_NAME = "_excad_tmp"
-
-        try:
-            # 清理同名旧选择集
-            try:
-                doc.SelectionSets.Item(SS_NAME).Delete()
-            except: pass
-
-            ss = doc.SelectionSets.Add(SS_NAME)
-
-            # 过滤器：实体类型=INSERT 且 块名=block_name
-            # ZWCAD 在进程内部完成筛选，只把结果交给 Python
-            filter_type = VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_I2,     [0,        2])
-            filter_data = VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_VARIANT, ["INSERT", block_name])
-
-            # 5 = acSelectionSetAll，全图筛选，无需框选
-            ss.Select(5, None, None, filter_type, filter_data)
-            self.debug(f"SelectionSet 筛到 {ss.Count} 个 [{block_name}] 块")
-
-            for i in range(ss.Count):
-                try:
-                    ent = ss.Item(i)
-                    for a in ent.GetAttributes():
-                        if getattr(a, "TagString", "") == ATTRIBUTE_TAG_B:
-                            b_val = (getattr(a, "TextString", None) or "").strip()
-                            if b_val and b_val not in cache:
-                                p = ent.InsertionPoint
-                                cache[b_val] = (
-                                    float(p[0]),
-                                    float(p[1]),
-                                    float(p[2]) if len(p) > 2 else 0.0,
-                                )
-                            break
-                    if required and required.issubset(cache.keys()):
-                        self.debug("已收齐所需B值，提前退出")
-                        break
-                except: continue
-
-        except Exception as e:
-            self.debug(f"SelectionSet方案失败: {e}，改用逐实体扫描...")
-            # ── 兜底：ModelSpace 逐实体反向扫描 ──
-            ms = doc.ModelSpace
-            for i in range(ms.Count - 1, -1, -1):
-                try:
-                    ent = ms.Item(i)
-                    if getattr(ent, "EntityName", "") != "AcDbBlockReference": continue
-                    if getattr(ent, "Name", "") != block_name: continue
-                    for a in ent.GetAttributes():
-                        if getattr(a, "TagString", "") == ATTRIBUTE_TAG_B:
-                            b_val = (getattr(a, "TextString", None) or "").strip()
-                            if b_val and b_val not in cache:
-                                p = ent.InsertionPoint
-                                cache[b_val] = (
-                                    float(p[0]),
-                                    float(p[1]),
-                                    float(p[2]) if len(p) > 2 else 0.0,
-                                )
-                            break
-                    if required and required.issubset(cache.keys()):
-                        break
-                except: continue
-
-        finally:
-            try:
-                doc.SelectionSets.Item(SS_NAME).Delete()
-            except: pass
-
-        return cache
-
-    def _move_and_scale(self, doc, entities, placement, target_width):
-        """将实体缩放到目标宽度并移动到指定位置"""
-        if not entities:
-            self.log("无实体可操作"); return False
-        px, py, pz = float(placement[0]), float(placement[1]), float(placement[2] if len(placement) > 2 else 0)
-
-        min_x = min_y = 1e18
-        max_x = max_y = -1e18
-        bounds = []
-        for ent in entities:
-            try:
-                lo, hi = ent.GetBoundingBox()
-                bounds.append((ent, lo, hi))
-                min_x = min(min_x, lo[0]); min_y = min(min_y, lo[1])
-                max_x = max(max_x, hi[0]); max_y = max(max_y, hi[1])
-            except: continue
-
-        if max_x <= min_x:
-            self.log("无法获取实体边界"); return False
-
-        scale = float(target_width) / (max_x - min_x)
-        dx = px - min_x
-        dy = py - max_y
-        base_pt = VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_R8, [px, py, pz])
-
-        moved = scaled = 0
-        for ent, lo, hi in bounds:
-            try:
-                from_pt = VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_R8, [lo[0], hi[1], 0.0])
-                to_pt   = VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_R8, [lo[0]+dx, hi[1]+dy, 0.0])
-                ent.Move(from_pt, to_pt); moved += 1
-            except Exception as e:
-                self.debug(f"移动失败: {e}")
-            try:
-                ent.ScaleEntity(base_pt, scale); scaled += 1
-            except Exception as e:
-                self.debug(f"缩放失败: {e}")
-
-        self.log(f"移动 {moved} 个、缩放 {scaled} 个实体，目标宽度 {target_width:.0f}")
-        doc.Regen(1)
-        return True
-
-    # ──────────────────────────────────────────
-    #  Excel 数据范围查找
-    # ──────────────────────────────────────────
-
-    def _find_data_range(self, sheet, start_col, end_col):
-        """扫描指定列范围，返回(首行, 末行)，超过20行空行则停止"""
-        sc = self._col_to_num(start_col)
-        ec = self._col_to_num(end_col)
-        first = last = None
-        for row in range(1, 2001):
-            has = any(
-                sheet.Cells(row, c).Value not in (None, "")
-                for c in range(sc, ec + 1)
-            )
-            if has:
-                if first is None: first = row
-                last = row
-            elif first and (row - last) > 20:
-                break
-        return first, last
-
-    def _col_to_num(self, col):
-        n = 0
-        for ch in col.upper():
-            n = n * 26 + (ord(ch) - ord("A") + 1)
-        return n
-
-    # ──────────────────────────────────────────
-    #  日志
-    # ──────────────────────────────────────────
-
-    def log(self, msg):
-        self.log_text.insert(tk.END, msg + "\n")
-        self.log_text.see(tk.END)
-        self.window.update()
-
-    def debug(self, msg):
-        if self.debug_var.get():
-            self.log(f"[DEBUG] {msg}")
-
-
-if __name__ == "__main__":
-    ExcelToCAD().show()
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ExpenseLog</title>
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png" sizes="180x180">
+<style>
+body{
+  font-family:-apple-system,BlinkMacSystemFont;
+  background:#f5f5f5;
+  margin:0;
+  padding:12px;
+}
+h2{text-align:center;margin:16px 0 12px 0;font-size:22px;font-weight:700;color:#333;}
+
+input[type="number"], input[type="text"]{
+  width:100%;
+  padding:14px;
+  font-size:16px;
+  box-sizing:border-box;
+  border-radius:10px;
+  border:1px solid #ddd;
+  background:white;
+  box-shadow:0 2px 4px rgba(0,0,0,0.05);
+  margin-bottom:12px;
+}
+
+.section{margin:12px 0;}
+
+.input-row{
+  display:flex;
+  gap:10px;
+}
+
+.input-row input{
+  flex:1;
+  margin-bottom:0;
+}
+
+.button-group{
+  display:flex;
+  gap:6px;
+  margin:10px 0;
+  overflow-x:auto;
+  padding-bottom:4px;
+  height:80px;
+}
+.button-group button{
+  flex:1;
+  min-width:40px;
+  height:80px;
+  padding:10px 4px;
+  border:none;
+  border-radius:10px;
+  background:#e0e0e0;
+  font-size:15px;
+  font-weight:500;
+  transition:all 0.2s ease;
+  writing-mode:vertical-rl;
+  text-orientation:upright;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border:1px solid #d0d0d0;
+}
+
+.button-group button:hover{
+  background:#d0d0d0;
+  border-color:#c0c0c0;
+}
+.button-group button.selected{
+  background:#007AFF;
+  color:white;
+  transform:scale(1.05);
+}
+
+.radio-group{
+  display:flex;
+  justify-content:center;
+  gap:30px;
+}
+
+.button-row{
+  display:flex;
+  gap:8px;
+  margin:12px 0;
+}
+
+.button-row button{
+  flex:1;
+  padding:12px;
+  border:none;
+  border-radius:12px;
+  color:white;
+  font-size:14px;
+  font-weight:500;
+  transition:all 0.2s ease;
+}
+
+.primary-btn{
+  background:#34C759;
+}
+
+.export-btn{
+  background:#FF9500;
+}
+
+.primary-btn:hover,
+.export-btn:hover{
+  transform:scale(1.02);
+  opacity:0.9;
+}
+
+.record{
+  background:white;
+  border-radius:10px;
+  margin-top:8px;
+  font-size:13px;
+  box-shadow:0 2px 6px rgba(0,0,0,0.06);
+  transition:all 0.2s ease;
+  overflow:hidden;
+}
+
+.record:hover{
+  box-shadow:0 3px 9px rgba(0,0,0,0.1);
+}
+
+.record-content{
+  padding:10px 12px;
+  cursor:pointer;
+}
+
+.record-info{
+  display:grid;
+  grid-template-columns: 1fr auto auto 1fr;
+  align-items:center;
+  gap:10px;
+}
+
+.record-amount{
+  font-size:16px;
+  font-weight:bold;
+  color:#333;
+  text-align:left;
+}
+
+.record-category{
+  font-size:13px;
+  font-weight:500;
+  color:#666;
+  background:#f5f5f5;
+  padding:2px 8px;
+  border-radius:12px;
+  text-align:center;
+  min-width:40px;
+}
+
+.record-date{
+  font-size:12px;
+  color:#999;
+  text-align:left;
+  min-width:80px;
+}
+
+.record-remark{
+  font-size:12px;
+  color:#666;
+  text-align:left;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.record-actions{
+  display:flex;
+  gap:8px;
+  padding:8px 12px 12px;
+  border-top:1px solid #f0f0f0;
+  background:#fafafa;
+}
+
+.record-actions button{
+  flex:1;
+  padding:6px 12px;
+  border:none;
+  border-radius:6px;
+  font-size:12px;
+  font-weight:500;
+  cursor:pointer;
+  transition:all 0.2s ease;
+}
+
+.record-actions button:first-child{
+  background:#007AFF;
+  color:white;
+}
+
+.record-actions button:last-child{
+  background:#FF3B30;
+  color:white;
+}
+
+.record-actions button:hover{
+  transform:scale(1.05);
+  opacity:0.9;
+}
+
+.record-top span:last-child{
+  font-size:12px;
+  padding:3px 10px;
+  border-radius:10px;
+  background:#f0f0f0;
+  color:#666;
+}
+
+.record small{color:#999;font-size:11px;}
+
+.record div:nth-child(3){
+  margin-top:8px;
+  display:flex;
+  gap:6px;
+}
+
+.edit-actions button{
+  flex:1;
+  padding:8px 12px;
+  border:none;
+  border-radius:8px;
+  font-size:12px;
+  font-weight:500;
+  transition:all 0.2s ease;
+}
+
+.edit-actions button:first-child{
+  background:#34C759;
+  color:white;
+}
+
+.edit-actions button:last-child{
+  background:#FF3B30;
+  color:white;
+}
+
+.edit-actions button:hover{
+  transform:scale(1.05);
+  opacity:0.9;
+}
+
+.filter{
+  display:flex;
+  gap:6px;
+  margin-top:10px;
+}
+.filter input{
+  flex:1;
+}
+
+.edit-box{
+  background:#eef;
+  padding:8px;
+  border-radius:8px;
+  margin-top:6px;
+}
+.edit-box input{
+  width:100%;
+  margin-bottom:5px;
+}
+.edit-actions{
+  display:flex;
+  gap:6px;
+}
+.edit-actions button{
+  flex:1;
+  padding:6px;
+}
+</style>
+</head>
+<body>
+
+<h2>ExpenseLog</h2>
+
+<div class="section input-row">
+  <input type="number" id="amount" placeholder="金额" autofocus>
+  <input type="text" id="remark" placeholder="备注">
+</div>
+
+<div class="section button-group" id="categoryGroup">
+  <button data-cat="早餐">早餐</button>
+  <button data-cat="午餐">午餐</button>
+  <button data-cat="晚餐">晚餐</button>
+  <button data-cat="夜宵">夜宵</button>
+  <button data-cat="住宿">住宿</button>
+  <button data-cat="日消">日消</button>
+  <button data-cat="其他">其他</button>
+</div>
+
+<div class="section radio-group">
+  <label><input type="radio" name="type" value="实时" checked> 实时</label>
+  <label><input type="radio" name="type" value="回忆"> 回忆</label>
+</div>
+
+<div class="button-row">
+  <button class="primary-btn" onclick="addRecord()">保存记录</button>
+  <button class="export-btn" onclick="exportCSV()">导出 CSV</button>
+</div>
+
+<div class="filter">
+  <input type="date" id="start">
+  <input type="date" id="end">
+  <button onclick="applyFilter()">筛选</button>
+</div>
+
+<div id="list"></div>
+
+<script>
+let records = JSON.parse(localStorage.getItem("records")||"[]");
+let editingId = null;
+
+// 设置默认日期
+function setDefaultDates() {
+  const startDate = document.getElementById("start");
+  const endDate = document.getElementById("end");
+  
+  // 设置开始日期为2026年1月1日
+  startDate.value = "2026-01-01";
+  
+  // 设置结束日期为当前日期
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, '0');
+  const day = String(today.getDate()).padStart(2, '0');
+  endDate.value = `${year}-${month}-${day}`;
+}
+
+function saveStorage(){
+  localStorage.setItem("records",JSON.stringify(records));
+}
+
+function addRecord(){
+  const amount = parseFloat(document.getElementById("amount").value);
+  if(!amount){alert("输入金额");return;}
+  const catBtn = document.querySelector(".button-group button.selected");
+  if(!catBtn){alert("选分类");return;}
+  const type = document.querySelector("input[name='type']:checked").value;
+  const remark = document.getElementById("remark").value;
+
+  records.unshift({
+    id:Date.now(),
+    date:new Date().toISOString(),
+    amount,
+    category:catBtn.dataset.cat,
+    type,
+    remark
+  });
+
+  saveStorage();
+  render(records);
+  document.getElementById("amount").value="";
+  document.getElementById("remark").value="";
+  document.getElementById("amount").focus();
+}
+
+function render(data){
+  const list=document.getElementById("list");
+  list.innerHTML="";
+  data.forEach(r=>{
+    const div=document.createElement("div");
+    div.className="record";
+    div.innerHTML=`
+      <div class="record-content" onclick="toggleRecordActions(${r.id})">
+        <div class="record-info">
+          <span class="record-amount">${r.amount} 元</span>
+          <span class="record-category">${r.category}</span>
+          <span class="record-date">${new Date(r.date).toLocaleDateString()}</span>
+          ${r.remark ? `<span class="record-remark">${r.remark}</span>` : ''}
+        </div>
+      </div>
+      <div class="record-actions" id="actions-${r.id}" style="display: none;">
+        <button onclick="showEdit(${r.id}); event.stopPropagation();">编辑</button>
+        <button onclick="removeRecord(${r.id}); event.stopPropagation();">删除</button>
+      </div>
+      <div id="edit-${r.id}"></div>
+    `;
+    list.appendChild(div);
+  });
+}
+
+// 切换记录操作按钮的显示/隐藏
+function toggleRecordActions(id) {
+  // 隐藏所有编辑表单
+  document.querySelectorAll('.edit-box').forEach(box => {
+    box.innerHTML = '';
+  });
+  editingId = null;
+  
+  // 切换当前记录的操作按钮显示/隐藏
+  const actions = document.getElementById(`actions-${id}`);
+  if (actions) {
+    if (actions.style.display === 'flex') {
+      // 如果当前是显示状态，隐藏它
+      actions.style.display = 'none';
+    } else {
+      // 如果当前是隐藏状态，先隐藏所有其他的，再显示当前的
+      document.querySelectorAll('.record-actions').forEach(a => {
+        a.style.display = 'none';
+      });
+      actions.style.display = 'flex';
+    }
+  }
+}
+
+function showEdit(id){
+  if(editingId && editingId!==id){
+    document.getElementById("edit-"+editingId).innerHTML="";
+  }
+  editingId=id;
+  const r=records.find(x=>x.id===id);
+  const box=document.getElementById("edit-"+id);
+  box.innerHTML=`
+    <div class="edit-box">
+      <input type="number" id="editAmount" value="${r.amount}">
+      <input type="text" id="editCategory" value="${r.category}">
+      <input type="text" id="editType" value="${r.type}">
+      <input type="text" id="editRemark" value="${r.remark || ''}" placeholder="备注">
+      <div class="edit-actions">
+        <button onclick="saveEdit(${id})">保存</button>
+        <button onclick="cancelEdit(${id})">取消</button>
+      </div>
+    </div>
+  `;
+}
+
+function saveEdit(id){
+  const r=records.find(x=>x.id===id);
+  r.amount=parseFloat(document.getElementById("editAmount").value);
+  r.category=document.getElementById("editCategory").value;
+  r.type=document.getElementById("editType").value;
+  r.remark=document.getElementById("editRemark").value;
+  saveStorage();
+  editingId=null;
+  render(records);
+}
+
+function cancelEdit(id){
+  document.getElementById("edit-"+id).innerHTML="";
+  editingId=null;
+  // 隐藏操作按钮，回到初始状态
+  const actions = document.getElementById(`actions-${id}`);
+  if (actions) {
+    actions.style.display = 'none';
+  }
+}
+
+function removeRecord(id){
+  if(confirm("确认删除？")){
+    records=records.filter(r=>r.id!==id);
+    saveStorage();
+    render(records);
+  }
+}
+
+function applyFilter(){
+  const s=document.getElementById("start").value;
+  const e=document.getElementById("end").value;
+  let filtered=records;
+  if(s) filtered=filtered.filter(r=>r.date>=s);
+  if(e) filtered=filtered.filter(r=>r.date<=e+"T23:59:59");
+  render(filtered);
+}
+
+function exportCSV(){
+  let csv="时间,金额,分类,记录类型,备注\n";
+  records.forEach(r=>{
+    // 转换日期时间格式为更友好的格式
+    const date = new Date(r.date);
+    const formattedDate = date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+    csv+=`${formattedDate},${r.amount},${r.category},${r.type},${r.remark || ''}\n`;
+  });
+  const blob=new Blob([csv],{type:"text/csv"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  
+  // 生成带日期时间的文件名
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hour = String(now.getHours()).padStart(2, '0');
+  const minute = String(now.getMinutes()).padStart(2, '0');
+  const second = String(now.getSeconds()).padStart(2, '0');
+  
+  const fileName = `记账导出${year}${month}${day}${hour}${minute}${second}.csv`;
+  a.download=fileName;
+  a.click();
+}
+
+
+
+document.querySelectorAll(".button-group button").forEach(btn=>{
+  btn.onclick=()=>{
+    document.querySelectorAll(".button-group button").forEach(b=>b.classList.remove("selected"));
+    btn.classList.add("selected");
+  }
+});
+
+render(records);
+
+// 确保输入框聚焦
+function focusAmountInput() {
+  const amountInput = document.getElementById("amount");
+  if (amountInput) {
+    amountInput.focus();
+    amountInput.select(); // 选中输入框内容，便于直接输入
+    // 尝试触发输入法
+    if ('requestFocus' in amountInput) {
+      amountInput.requestFocus();
+    }
+  }
+}
+
+// 多种方式确保聚焦
+window.addEventListener('DOMContentLoaded', function() {
+  focusAmountInput();
+  setDefaultDates();
+});
+window.addEventListener('load', focusAmountInput);
+
+// 立即尝试聚焦（如果DOM已经加载）
+setTimeout(focusAmountInput, 100);
+</script>
+
+</body>
+</html>
