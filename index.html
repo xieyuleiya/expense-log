@@ -107,8 +107,27 @@ input[type="number"], input[type="text"]{
   background:#FF9500;
 }
 
+.csv-btn{
+  background:#34C759;
+}
+
+.backup-btn{
+  background:#34C759;
+}
+
+.import-btn{
+  background:#34C759;
+}
+
 .primary-btn:hover,
 .export-btn:hover{
+  transform:scale(1.02);
+  opacity:0.9;
+}
+
+.csv-btn:hover,
+.backup-btn:hover,
+.import-btn:hover{
   transform:scale(1.02);
   opacity:0.9;
 }
@@ -257,6 +276,81 @@ input[type="number"], input[type="text"]{
   flex:1;
 }
 
+.analytics{
+  display:flex;
+  gap:10px;
+  margin-top:10px;
+}
+
+.analytics-left{
+  flex:1;
+  background:white;
+  border-radius:10px;
+  box-shadow:0 2px 6px rgba(0,0,0,0.06);
+  padding:10px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+}
+
+.chart-legend{
+  width:100%;
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px 12px;
+  margin-top:8px;
+  font-size:12px;
+  color:#333;
+}
+
+.legend-item{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  min-width:110px;
+}
+
+.legend-swatch{
+  width:10px;
+  height:10px;
+  border-radius:3px;
+  flex:0 0 auto;
+}
+
+.legend-text{
+  white-space:nowrap;
+}
+
+.analytics-right{
+  width:220px;
+  background:white;
+  border-radius:10px;
+  box-shadow:0 2px 6px rgba(0,0,0,0.06);
+  padding:10px;
+  box-sizing:border-box;
+}
+
+.analytics-toggle{
+  display:flex;
+  gap:10px;
+  margin-bottom:8px;
+  font-size:12px;
+  color:#333;
+}
+
+.analytics-stats{
+  font-size:12px;
+  color:#333;
+  line-height:1.7;
+  word-break:break-all;
+}
+
+.analytics-stats .total{
+  font-weight:700;
+  margin-top:6px;
+}
+
 .edit-box{
   background:#eef;
   padding:8px;
@@ -303,15 +397,29 @@ input[type="number"], input[type="text"]{
 
 <div class="button-row">
   <button class="primary-btn" onclick="addRecord()">保存记录</button>
-  <button class="export-btn" onclick="exportCSV()">导出 CSV</button>
-  <button class="export-btn" onclick="exportJSON()">导出备份</button>
-  <button class="export-btn" onclick="triggerImportJSON()">导入备份</button>
+  <button class="export-btn csv-btn" onclick="exportCSV()">导出 CSV</button>
+  <button class="export-btn backup-btn" onclick="exportJSON()">导出备份</button>
+  <button class="export-btn import-btn" onclick="triggerImportJSON()">导入备份</button>
 </div>
 
 <div class="filter">
   <input type="date" id="start">
   <input type="date" id="end">
   <button onclick="applyFilter()">筛选</button>
+</div>
+
+<div class="analytics">
+  <div class="analytics-left">
+    <canvas id="pieChart" width="260" height="260"></canvas>
+    <div class="chart-legend" id="chartLegend"></div>
+  </div>
+  <div class="analytics-right">
+    <div class="analytics-toggle">
+      <label><input type="radio" name="statMode" value="filter" checked> 按筛选</label>
+      <label><input type="radio" name="statMode" value="month"> 本月</label>
+    </div>
+    <div class="analytics-stats" id="statsBox"></div>
+  </div>
 </div>
 
 <input type="file" id="importJsonFile" accept="application/json" style="display:none" onchange="handleImportJSON(event)">
@@ -361,6 +469,7 @@ function addRecord(){
 
   saveStorage();
   render(records);
+  updateAnalytics();
   document.getElementById("amount").value="";
   document.getElementById("remark").value="";
   document.getElementById("amount").focus();
@@ -445,6 +554,7 @@ function saveEdit(id){
   saveStorage();
   editingId=null;
   render(records);
+  updateAnalytics();
 }
 
 function cancelEdit(id){
@@ -462,6 +572,7 @@ function removeRecord(id){
     records=records.filter(r=>r.id!==id);
     saveStorage();
     render(records);
+    updateAnalytics();
   }
 }
 
@@ -472,6 +583,7 @@ function applyFilter(){
   if(s) filtered=filtered.filter(r=>r.date>=s);
   if(e) filtered=filtered.filter(r=>r.date<=e+"T23:59:59");
   render(filtered);
+  updateAnalytics();
 }
 
 function exportCSV(){
@@ -609,12 +721,151 @@ function handleImportJSON(event){
       records = merged;
       saveStorage();
       render(records);
+      updateAnalytics();
       alert(`导入完成，新增 ${added} 条`);
     }catch(e){
       alert("导入失败：文件不是有效的JSON");
     }
   };
   reader.readAsText(file);
+}
+
+function getRecordsByMode(){
+  const mode = (document.querySelector("input[name='statMode']:checked") || {}).value || 'filter';
+  let start = null;
+  let end = null;
+
+  if(mode === 'month'){
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    start = `${y}-${m}-01`;
+    end = `${y}-${m}-${String(now.getDate()).padStart(2, '0')}`;
+  }else{
+    start = document.getElementById('start').value || null;
+    end = document.getElementById('end').value || null;
+  }
+
+  let data = records;
+  if(start) data = data.filter(r=>r.date>=start);
+  if(end) data = data.filter(r=>r.date<=end+"T23:59:59");
+  return { data, start, end, mode };
+}
+
+function computeSums(data){
+  const sums = { '早餐': 0, '午餐': 0, '晚餐': 0, '其余': 0 };
+  data.forEach(r=>{
+    const amt = typeof r.amount === 'number' ? r.amount : parseFloat(r.amount);
+    if(!amt) return;
+    if(r.category === '早餐') sums['早餐'] += amt;
+    else if(r.category === '午餐') sums['午餐'] += amt;
+    else if(r.category === '晚餐') sums['晚餐'] += amt;
+    else sums['其余'] += amt;
+  });
+  return sums;
+}
+
+function drawPieChart(sums){
+  const canvas = document.getElementById('pieChart');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const labels = ['早餐','午餐','晚餐','其余'];
+  const colors = ['#FF9500','#34C759','#0A84FF','#8E8E93'];
+  const values = labels.map(l=>Math.max(0, sums[l] || 0));
+  const total = values.reduce((a,b)=>a+b,0);
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const cx = canvas.width/2;
+  const cy = canvas.height/2;
+  const r = Math.min(cx,cy) - 10;
+
+  if(!total){
+    ctx.fillStyle = '#f0f0f0';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#666';
+    ctx.font = '14px -apple-system,BlinkMacSystemFont';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('暂无数据', cx, cy);
+    return;
+  }
+
+  let startAngle = -Math.PI/2;
+  labels.forEach((label, i)=>{
+    const v = values[i];
+    const angle = (v/total) * Math.PI*2;
+    const endAngle = startAngle + angle;
+
+    ctx.fillStyle = colors[i];
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, startAngle, endAngle);
+    ctx.closePath();
+    ctx.fill();
+
+    startAngle = endAngle;
+  });
+
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r*0.55, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.fillStyle = '#333';
+  ctx.font = '700 14px -apple-system,BlinkMacSystemFont';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`总计 ${total.toFixed(2)}`, cx, cy);
+}
+
+function updateChartLegend(sums){
+  const legend = document.getElementById('chartLegend');
+  if(!legend) return;
+  const labels = ['早餐','午餐','晚餐','其余'];
+  const colors = ['#FF9500','#34C759','#0A84FF','#8E8E93'];
+  const total = labels.reduce((acc,l)=>acc+(sums[l]||0),0);
+
+  const html = labels.map((label, i)=>{
+    const v = sums[label] || 0;
+    const pct = total ? (v/total*100) : 0;
+    return `
+      <div class="legend-item">
+        <span class="legend-swatch" style="background:${colors[i]}"></span>
+        <span class="legend-text">${label} ${v.toFixed(2)}元 (${pct.toFixed(1)}%)</span>
+      </div>
+    `;
+  }).join('');
+
+  legend.innerHTML = html;
+}
+
+function updateStatsBox(meta, sums){
+  const box = document.getElementById('statsBox');
+  if(!box) return;
+  const labels = ['早餐','午餐','晚餐','其余'];
+  const total = labels.reduce((acc,l)=>acc+(sums[l]||0),0);
+
+  const rangeText = meta.mode === 'month'
+    ? `范围：本月月初 - 今天`
+    : `范围：${meta.start || '不限'} - ${meta.end || '不限'}`;
+
+  const lines = [];
+  lines.push(`<div>${rangeText}</div>`);
+  labels.forEach(l=>{
+    lines.push(`<div>${l}：${(sums[l]||0).toFixed(2)} 元</div>`);
+  });
+  lines.push(`<div class="total">总计：${total.toFixed(2)} 元</div>`);
+  box.innerHTML = lines.join('');
+}
+
+function updateAnalytics(){
+  const meta = getRecordsByMode();
+  const sums = computeSums(meta.data);
+  drawPieChart(sums);
+  updateChartLegend(sums);
+  updateStatsBox(meta, sums);
 }
 
 document.querySelectorAll(".button-group button").forEach(btn=>{
@@ -625,14 +876,13 @@ document.querySelectorAll(".button-group button").forEach(btn=>{
 });
 
 render(records);
+updateAnalytics();
 
-// 确保输入框聚焦
 function focusAmountInput() {
   const amountInput = document.getElementById("amount");
   if (amountInput) {
     amountInput.focus();
-    amountInput.select(); // 选中输入框内容，便于直接输入
-    // 尝试触发输入法
+    amountInput.select();
     if ('requestFocus' in amountInput) {
       amountInput.requestFocus();
     }
@@ -643,6 +893,11 @@ function focusAmountInput() {
 window.addEventListener('DOMContentLoaded', function() {
   focusAmountInput();
   setDefaultDates();
+
+  document.querySelectorAll("input[name='statMode']").forEach(r=>{
+    r.addEventListener('change', updateAnalytics);
+  });
+  updateAnalytics();
 });
 window.addEventListener('load', focusAmountInput);
 
